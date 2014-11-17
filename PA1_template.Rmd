@@ -1,25 +1,194 @@
 ---
-title: "Reproducible Research: Peer Assessment 1"
-output: 
-  html_document:
-    keep_md: true
+title: "PA1_template"
+author: "Andrew Moore"
+date: "Sunday, November 16, 2014"
+output: html_document
 ---
 
+For the first peer assignment, we'll be looking at activity data collected from a single subject via their smartphone's accelerometer, gyroscope, and other on-board methods of measuring movement.
 
-## Loading and preprocessing the data
+Let's start by getting the data ready. You should make sure that all the files are available in your working directory.
 
+```{r}
+getwd()
+list.files()
 
+## reading the data in
+data <- read.csv("activity.csv")
 
-## What is mean total number of steps taken per day?
+## formatting our date variable correctly
+data[, 2] <- as.Date(data[, 2], "%Y-%m-%d")
 
+```
 
+Now we should have the data in our environment. Next we'll look at some simple summaries. We can use ggplot2 to build a histogram of the total number of steps each day.
 
-## What is the average daily activity pattern?
+We'll need the sum of the number of steps taken each day, so let's run some code to grab that data first.
 
+```{r}
+dailystepstotal <- aggregate(steps ~ date, data, sum)
 
+head(dailystepstotal)
+```
 
-## Imputing missing values
+Okay, now let's make the histogram.
 
+```{r}
+library(ggplot2)
 
+plot <- ggplot(dailystepstotal, aes(steps))
+plot + geom_histogram(binwidth = 4000, fill = "blue")
+```
 
-## Are there differences in activity patterns between weekdays and weekends?
+Pretty lumpy. What's the mean and median for these summed steps?
+
+```{r}
+mean(dailystepstotal$steps)
+
+median(dailystepstotal$steps)
+
+```
+
+Okay, seems to reflect the general trends in the histogram. Now let's look at how the average amount of steps varies across different times of day, with the ultimate goal of graphing this pattern.
+
+The first thing we'll need is the numeric values that inform this graph. Let's take the averages of each 5-minute measurement interval.
+
+```{r}
+stepintervalavg <- aggregate(steps ~ interval, data, mean)
+
+str(stepintervalavg)
+head(stepintervalavg$interval); tail(stepintervalavg$interval)
+```
+
+It looks like the interval measurement is still being treated as an integer value. It also seems that the time is being measured under the 24-hour clock. I don't see any real problem with measuring time this way, but it needs to be cleaned up bit before we use it to inform our graph.
+
+```{r}
+## let's add some 00s to make things more uniform, and make sure that you can 
+## deliniate hours/minutes.
+
+for (i in 1:12) {
+    stepintervalavg$interval[i] <- paste("00", stepintervalavg$interval[i], sep = "")
+}
+
+stepintervalavg[1, 1] <- "0000"
+stepintervalavg[2, 1] <- "0005"
+```
+
+Okay, that takes care of the first few values. But looking at the middle of the vector --i.e. stepintervalavg$interval[13:120] --, we're missing the frontal "0"s during times like 8:00 or 9:00. Let's make sure that those are in place.
+
+```{r}
+yep <- stepintervalavg$interval[13:120]
+
+for (i in 1:108) {
+    yep[i] <- paste("0", yep[i], sep = "")
+}
+
+stepintervalavg$interval[13:120] <- yep
+```
+
+Now that all the times have been cleaned up, we can convert them into times that can be read by plotting systems. I used the lubridate package to achieve this.
+
+```{r}
+library(lubridate)
+
+stepintervalavg$interval <- parse_date_time(stepintervalavg$interval, "%H:%M")
+```
+
+Then we'll plot the time-series. I switched back to the base plotting system for this part. Let's also find which interval has the most number of steps.
+
+```{r}
+with(stepintervalavg, plot(interval, steps, type = "l", xlab = "Time", 
+                ylab = "Average Number of Steps", 
+                frame.plot = FALSE, lwd = 2))
+
+max(stepintervalavg$steps)
+
+## It looks like the biggest spike in activity took place a little while after 7:00am. Let's see which interval this is.
+
+stepintervalavg[97:107,]
+
+## Seems to be at 8:35am!
+```
+
+Okay, now that we've gotten a general sense of how the data presents itself, let's move on to something more serious. It seems like there are a lot of missing values in the dataset.
+
+```{r}
+table(!complete.cases(data))  ## the TRUEs will be incomplete cases...
+
+## Even the first day of the dataset doesn't seem to have recorded any steps taken by our subject... 
+
+head(data)
+```
+
+We can use a simple imputation strategy to help us try to mitigate potential bias from these missing cases. To keep things simple, let's just replace missing values with the average for that variable.
+
+```{r}
+data[is.na(data$steps) == "TRUE", 1] <- mean(data$steps, na.rm = T)
+
+table(!complete.cases(data)) ## Looks like all the NAs have been filled in!
+```
+
+To follow up, let's see if if/how the overall distribution has changed after imputing the missing values. We'll use the same code as the first section.
+
+```{r}
+dailystepstotal <- aggregate(steps ~ date, data, sum)
+
+plot <- ggplot(dailystepstotal, aes(steps))
+plot + geom_histogram(binwidth = 4000, fill = "blue")
+
+mean(dailystepstotal$steps)
+
+median(dailystepstotal$steps)
+```
+
+Hmm, it looks like it's gotten a bit flatter, but things haven't changed a whole lot. The means and medians only moved around 1 unit each. This might be an overall good sign, indicating that the previously missing cases hasn't radically affected the data's overall character.
+
+Alright, now the last thing we might look at is how a person's activity might change based on the given day of the week. Granted, our sample population is based off a single subject, but there's two hypotheses we might test. Are people more active and mobile during the week because they have more to do (and thus spend less time moving during the weekend)? Or are people mostly stationary during weekdays as they focus on their given tasks, and then use their free time to be more active on weekends?
+
+Let's start by splitting the dates into "weekdays" and "weekends".
+
+```{r}
+daytype <- weekdays(data$date)
+
+data <- cbind(data, daytype)
+
+table(grepl("Saturday", data$daytype))
+table(grepl("Sunday", data$daytype))
+
+data$daytype <- as.character(data$daytype)
+
+for (i in 1:nrow(data)) {
+    if (data$daytype[i] == "Saturday" | data$daytype[i] == "Sunday") {
+        data$daytype[i] <- "Weekend"
+    } else {
+        data$daytype[i] <- "Weekday"
+    }
+}
+
+data$daytype <- factor(data$daytype, levels = c("Weekday", "Weekend"),
+                       labels = c("Weekday", "Weekend"))
+
+```
+
+Cool, now we have our grouping variable! Now let's just build a plot where we compare steps on weekdays vs weekends. We'll keep using the imputed data, but this time we won't push hard on correcting the interval labels. We know it's measured on a 24-hour clock, and we're just interested in seeing the overall differences in pattern.
+
+```{r}
+## Making our subsets
+weekdays <- data[data$daytype == "Weekday",]
+weekends <- data[data$daytype == "Weekend",]
+
+weekdaystepavg <- aggregate(steps ~ interval, weekdays, mean)
+weekendstepavg <- aggregate(steps ~ interval, weekends, mean)
+
+par(mfrow = c(2, 1))
+
+with(weekdaystepavg, plot(interval, steps, type = "l", xlab = "Time", 
+                ylab = "Average Number of Steps", main = "Weekdays",
+                frame.plot = FALSE, lwd = 2))
+
+with(weekendstepavg, plot(interval, steps, type = "l", xlab = "Time", 
+                ylab = "Average Number of Steps", main = "Weekends",
+                frame.plot = FALSE, lwd = 2))
+```
+
+It seems that the extremes in terms of walking activiy aren't as large on the weekends, but there's definitely more variability. This seems very reasonable; we have more consistent routines during the week, but we may be more or less active on the weekends depending on how we choose to spend our time. 
